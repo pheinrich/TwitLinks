@@ -95,13 +95,13 @@ end
 # Process each file specified on the command line.
 ARGV.each do |file|
   file += options[:extension] if File.extname( file ).empty?
-  puts "Reading #{file}..." if options[:verbose]
+  puts "Reading #{file}..."
 
   links = CSV.read( file, encoding: options[:encoding] )
   out = options[:append] || get_output_path( file, options[:extension] )
 
   CSV.open( out, 'ab' ) do |csv|
-    puts "Writing to #{out}..." if options[:verbose]
+    puts "Writing to #{out}..."
 
     links.each_with_index do |row, i|
       row << 'URL' if 0 == i
