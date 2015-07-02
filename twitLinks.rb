@@ -227,85 +227,10 @@ if @options[:verbose]
   puts "Overwriting output file#{'s' if @options[:output]}" if @options[:truncate]
 end
 
-def process
-  if @options[:output]
-    tweets = []
-    ARGV.each {|file| tweets += read_csv( file )}
-    write_xslx( @options[:output], tweets )
-  else
-    ARGV.each {|file| write_xslx( file, read_csv( file ) )}
-  end
-end
-
-
-def proc2
-# Process each file specified on the command line.
-ARGV.each do |file|
-  mentions, tags = [], []
-  file += @options[:extension] if File.extname( file ).empty?
-  puts "Reading #{file}..."
-
-  links = CSV.read( file, encoding: @options[:encoding] )
-  out = @options[:append] || get_output_path( file, @options[:extension] )
-
-  CSV.open( out, 'ab' ) do |csv|
-    puts "Writing to #{out}..."
-
-    links.each_with_index do |row, i|
-      row << 'URL' if 0 == i
-      id = row[TWEETID_COL]
-
-      # Eliminate carriage returns in the source data, since they contaminate
-      # the output and lead to formatting errors.
-      row.map! {|col| col.gsub( /\r/, '' )}
-      tweet = row[TWEETTEXT_COL]
-      target = nil
-  
-      # Find the first link embedded in the tweet text, if any.
-      if /^.*?(?<url>https*:\/\/t\.co\/[a-zA-Z0-9]+)/.match( tweet )
-        # Follow all redirects until the actual resource is found.
-        url = $~[:url] 
-        uri = URI.parse( redirect( url ) )
-        target = uri.to_s
-
-        # If the resulting target points back to Twitter, it's an embedded
-        # media resource.
-        if /^https*:\/\/twitter\.com\/.+\/[0-9]+\/(?<media>.+)\//.match( target )
-          target = "<embedded #{$~[:media]} media>"
-        end
-
-        puts "  #{i}:#{url} --> #{target}" if @options[:verbose]
-      else
-        puts "  #{i}:<no links>" if @options[:verbose]
-      end
-
-      # Track hashtags and references to other Twitter users, if requested.
-      tweet.scan( /@(\w{1,15})/ ).flatten.each {|user| mentions << [id, user]} if @options[:mentions]
-      tweet.scan( /#(\w+)/ ).flatten.each {|tag| tags << [id, tag]} if @options[:tags]
- 
-      row << target
-      csv << row
-    end
-  end
-
-  # Write a separate output file tracking mentions, if requested.
-  if @options[:mentions]
-    out = get_output_path( file, @options[:extension], 'mentions' )
-    CSV.open( out, 'ab' ) do |csv|
-      puts "Writing mentions to #{out}..."
-      csv << ['Tweet id', 'Mention']
-      mentions.each {|mention| csv << mention}
-    end
-  end
-
-  # Write a separate output file tracking hashtags, if requested.
-  if @options[:tags]
-    out = get_output_path( file, @options[:extension], 'hashtags' )
-    CSV.open( out, 'ab' ) do |csv|
-      puts "Writing hashtags to #{out}..."
-      csv << ['Tweet id', 'Hashtag']
-      tags.each {|tag| csv << tag}
-    end
-  end
-end
+if @options[:output]
+  tweets = []
+  ARGV.each {|file| tweets += read_csv( file )}
+  write_xlsx( @options[:output], tweets )
+else
+  ARGV.each {|file| write_xlsx( File.basename( file ), read_csv( file ) )}
 end
