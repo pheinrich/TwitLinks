@@ -17,6 +17,7 @@ TWITTER_COLS  = ['Tweet id', 'Tweet permalink', 'Tweet text', 'time',
 LINKS_COLS    = ['Tweet id', 'link', 'original']
 MENTIONS_COLS = ['Tweet id', 'mention']
 HASHTAGS_COLS = ['Tweet id', 'hashtag']
+PROGRESS_LEN  = 25
   
 @options = {}
 OptionParser.new do |opts|
@@ -28,7 +29,7 @@ OptionParser.new do |opts|
   opts.on( '-e', '--encoding ENC', "Open source files using a specific encoding (default: #{@options[:encoding]})" ) {|e| @options[:encoding] = e}
   opts.on( '-h', '--help', 'Display this usage information' ) {puts opts; exit}
   opts.on( '-o', '--output FILE', 'Combine results in a single output file' ) {|o| @options[:output] = o}
-  opts.on( '-r', '--redirects MAX', "Specify maximum redirects allowed per link (default: #{@options[:redirects]})" ) {|r| @options[:redirects] = r}
+  opts.on( '-r', '--redirects MAX', "Specify maximum redirects allowed per link (default: #{@options[:redirects]})" ) {|r| @options[:redirects] = r.to_i}
   opts.on( '-t', '--[no-]truncate', 'Overwrite output file if they exist' ) {|t| @options[:truncate] = t}
   opts.on( '-v', '--[no-]verbose', 'Display extra info during execution' ) {|v| @options[:verbose] = v}
 end.parse!
@@ -59,30 +60,24 @@ def find_target( uri, maxRedirects = @options[:redirects] )
     # components necessary to redirect.
     if loc
       redirect = URI.parse( URI.encode( loc ) )
-      redirect.scheme ||= uri.scheme
-      redirect.host ||= uri.host
-      redirect.port ||= uri.port
+      if URI::Generic == redirect.class
+        redirect.scheme ||= uri.scheme
+        redirect.host ||= uri.host
+        redirect.port ||= uri.port
+        redirect = URI.parse( redirect.to_s )
+      end
 
       # Recursively try again.
       uri = find_target( redirect, maxRedirects - 1 )
     end
   else
-    puts "Redirect limit exceeded (maximum=#{@options[:redirects]})"
+    @tooDeep += 1
   end
 
   uri
 rescue => e
   puts e.to_s
   nil
-end
-
-# Extract all the links, mentions, and hashtags from some tweet text.
-def parse_tweet( text )
-  links = text.scan( /https*:\/\/t\.co\/\w+/ ).map {|link| find_target( URI.parse( link ) )}
-  mentions = text.scan( /@(\w{1,15})/ ).flatten
-  tags = text.scan( /#(\w+)/ ).flatten
-  
-  return links, mentions, tags
 end
 
 def get_workbook( filename )
@@ -93,7 +88,7 @@ def get_workbook( filename )
   begin
     workbook = RubyXL::Parser.parse( filename ) unless @options[:truncate]
   rescue
-    puts "  Output file #{file} missing or invalid... creating" if @options[:verbose]
+    puts "  Output file #{filename} missing or invalid... creating" if @options[:verbose]
   end
 
   # Create a new workbook if necessary, then add tabs for the data we will
@@ -202,13 +197,26 @@ def write_xlsx( file, tweets )
 
   workbook = get_workbook( filename )
   indices = TWITTER_COLS.map {|name| tweets[0].find_index( name )}
-
   tweets.shift
-  tweets.each do |tweet|
+
+  puts "  Processing #{tweets.length} tweets:" if @options[:verbose]
+  @tooDeep = 0
+
+  tweets.each_with_index do |tweet, i|
     id, text = write_twitter_row( workbook, tweet, indices )
+
+    pct = 100.0 * i / tweets.length
+    prog = (PROGRESS_LEN * pct / 100.0).to_i
+    print "  [%s>%s] %d%% (#{id})    \r" % ['=' * prog, ' ' * (PROGRESS_LEN - prog), pct] if @options[:verbose] 
+
     write_link_rows( workbook, id, text )
     write_mention_rows( workbook, id, text )
     write_hashtag_rows( workbook, id, text )
+  end
+
+  if @options[:verbose]
+    puts "  [%s>] 100%%%s" % ['=' * PROGRESS_LEN, ' ' * PROGRESS_LEN]
+    puts "  #{@tooDeep} link#{'s' unless 1 == @tooDeep} exceeded redirect limit (max #{@options[:redirects]})" if 0 < @tooDeep
   end
 
   workbook.write( filename )
@@ -223,7 +231,7 @@ if @options[:verbose]
   puts "Using #{@options[:encoding]} encoding"
   puts "Maximum of #{@options[:redirects]} redirects allowed per link"
 
-  puts "Writing combining output to #{@options[:output]}" if @options[:output]
+  puts "Combining output in a single file" if @options[:output]
   puts "Overwriting output file#{'s' if @options[:output]}" if @options[:truncate]
 end
 
