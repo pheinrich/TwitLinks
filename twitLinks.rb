@@ -4,37 +4,38 @@ require 'csv'
 require 'openssl'
 require 'optparse'
 require 'net/http'
+require 'rubyXL'
 require 'uri'
 
-TWEETID_COL = 0
-TWEETTEXT_COL = 2
 
+SHEET_NAMES   = {twitter:'From Twitter', links:'Links', mentions:'Mentions', hashtags:'Hashtags'}
+TWITTER_COLS  = ['Tweet id', 'Tweet permalink', 'Tweet text', 'time',
+                 'impressions', 'engagements', 'engagement rate', 'retweets',
+                 'replies', 'favorites', 'user profile clicks', 'url clicks',
+                 'hashtag clicks', 'detail expands', 'permalink clicks',
+                 'embedded media views', 'app opens', 'app installs', 'follows']
+LINKS_COLS    = ['Tweet id', 'link', 'original']
+MENTIONS_COLS = ['Tweet id', 'mention']
+HASHTAGS_COLS = ['Tweet id', 'hashtag']
+  
 @options = {}
 OptionParser.new do |opts|
   opts.banner = 'Usage: twitLinks.rb [options] file1 file2 ...'
-  @options[:append] = nil
-  @options[:encoding] = 'ISO8859-1'
-  @options[:extension] = '.csv'
+  @options[:encoding] = 'UTF-8'
+  @options[:output] = nil
   @options[:redirects] = 5
 
-  opts.on( '-a', '--append FILE', 'Append output in a single file, which may exist' ) {|a| @options[:append] = a}
   opts.on( '-e', '--encoding ENC', "Open source files using a specific encoding (default: #{@options[:encoding]})" ) {|e| @options[:encoding] = e}
   opts.on( '-h', '--help', 'Display this usage information' ) {puts opts; exit}
-  opts.on( '-m', '--mentions', 'Generate separate output file(s) tracking mentions' ) {|m| @options[:mentions] = m}
+  opts.on( '-o', '--output FILE', 'Combine results in a single output file' ) {|o| @options[:output] = o}
   opts.on( '-r', '--redirects MAX', "Specify maximum redirects allowed per link (default: #{@options[:redirects]})" ) {|r| @options[:redirects] = r}
-  opts.on( '-t', '--tags', 'Generate separate output file(s) tracking hashtags' ) {|t| @options[:tags] = t}
+  opts.on( '-t', '--[no-]truncate', 'Overwrite output file if they exist' ) {|t| @options[:truncate] = t}
   opts.on( '-v', '--[no-]verbose', 'Display extra info during execution' ) {|v| @options[:verbose] = v}
-  opts.on( '-x', '--extension EXT', "Use a specific extension for output files (default: #{@options[:extension]})" ) {|x| @options[:extension] = x}
 end.parse!
 
-# Construct an output path from the filename given. This amounts to adding
-# '_out' (or other descriptor) to the root filename and changing the exten-
-# sion, if necessary.
-def get_output_path( file, defExt, type = 'out' )
-  arr = File.split( file )
-  ext = File.extname( arr[-1] )
-
-  arr[-1] = "#{File.basename( arr[-1], ext )}_#{type}#{defExt}"
+def add_ext( name, ext )
+  arr = File.split( name )
+  arr[-1] = File.basename( arr[-1], File.extname( arr[-1] ) ) + '.' + ext
   File.join( arr )
 end
 
@@ -84,22 +85,160 @@ def parse_tweet( text )
   return links, mentions, tags
 end
 
+def get_workbook( filename )
+  workbook = nil
 
-# Add an extension to the target file name, if it doesn't have one already.
-if @options[:append]
-  @options[:append] += @options[:extension] if File.extname( @options[:append] ).empty?
+  # Try to open an existing workbook if one is specified and we haven't been
+  # asked to simply overwrite it.
+  begin
+    workbook = RubyXL::Parser.parse( filename ) unless @options[:truncate]
+  rescue
+    puts "  Output file #{file} missing or invalid... creating" if @options[:verbose]
+  end
+
+  # Create a new workbook if necessary, then add tabs for the data we will
+  # output, if they don't exist.
+  if workbook.nil?
+    workbook = RubyXL::Workbook.new
+    workbook.worksheets.shift
+  end
+  SHEET_NAMES.values.each {|tab| workbook.add_worksheet( tab ) if workbook[tab].nil?}
+
+  workbook
 end
+
+def read_csv( file )
+  filename = add_ext( file, 'csv' )
+  puts "Reading #{filename}..."
+
+  CSV.read( filename, encoding: @options[:encoding] )
+end
+
+# Copy over the original Twitter data that we care about.
+def write_twitter_row( workbook, tweet, indices )
+  id = tweet[1].scan( /\d+$/ )[0]
+  text = tweet[2].gsub( /\r/, '' ) 
+
+  worksheet = workbook[SHEET_NAMES[:twitter]]
+  row = worksheet.count
+
+  # Add the header row if it doesn't already exist. Usually not an issue if
+  # updating an existing spreadsheet. 
+  if 0 == row
+    TWITTER_COLS.each_with_index {|label, i| worksheet.add_cell( row, i, label )}
+    row += 1
+  end
+
+  # Substitute our parsed id for the one Twitter provides (since it's worth-
+  # less) and the sanitized tweet text, then copy the rest of the data as-is.
+  indices.each_with_index {|i, j| worksheet.add_cell( row, j, tweet[i] )}
+  worksheet[row][0].change_contents( id )
+  worksheet[row][2].change_contents( text )
+
+  return id, text
+end
+
+def write_link_rows( workbook, id, text )
+  worksheet = workbook[SHEET_NAMES[:links]]
+  row = worksheet.count
+
+  # Add the header row if it doesn't already exist. Usually not an issue if
+  # updating an existing spreadsheet. 
+  if 0 == row
+    LINKS_COLS.each_with_index {|label, i| worksheet.add_cell( row, i, label )}
+    row += 1
+  end
+
+  # Output a row mapping each tweet id to the links it contains.
+  text.scan( /https*:\/\/t\.co\/\w+/ ).each do |link|
+    worksheet.add_cell( row, 0, id )
+    worksheet.add_cell( row, 1, find_target( URI.parse( link ) ) )
+    worksheet.add_cell( row, 2, link )
+    row += 1
+  end
+end
+
+def write_mention_rows( workbook, id, text )
+  worksheet = workbook[SHEET_NAMES[:mentions]]
+  row = worksheet.count
+
+  # Add the header row if it doesn't already exist. Usually not an issue if
+  # updating an existing spreadsheet.
+  if 0 == row
+    MENTIONS_COLS.each_with_index {|label, i| worksheet.add_cell( row, i, label )}
+    row += 1
+  end
+
+  # Output a row mapping each tweet id to the mentions it contains.
+  text.scan( /@(\w{1,15})/ ).flatten.each do |mention|
+    worksheet.add_cell( row, 0, id )
+    worksheet.add_cell( row, 1, mention )
+    row += 1
+  end
+end
+
+def write_hashtag_rows( workbook, id, text )
+  worksheet = workbook[SHEET_NAMES[:hashtags]]
+  row = worksheet.count
+
+  # Add the header row if it doesn't already exist. Usually not an issue if
+  # updating an existing spreadsheet. 
+  if 0 == row
+    HASHTAGS_COLS.each_with_index {|label, i| worksheet.add_cell( row, i, label )}
+    row += 1
+  end
+
+  # Output a row mapping each tweet id to the mentions it contains.
+  text.scan( /#(\w+)/ ).flatten.each do |hashtag|
+    worksheet.add_cell( row, 0, id )
+    worksheet.add_cell( row, 1, hashtag )
+    row += 1
+  end
+end
+
+def write_xlsx( file, tweets )
+  filename = add_ext( file, 'xlsx' )
+  puts "Writing #{filename}..."
+
+  workbook = get_workbook( filename )
+  indices = TWITTER_COLS.map {|name| tweets[0].find_index( name )}
+
+  tweets.shift
+  tweets.each do |tweet|
+    id, text = write_twitter_row( workbook, tweet, indices )
+    write_link_rows( workbook, id, text )
+    write_mention_rows( workbook, id, text )
+    write_hashtag_rows( workbook, id, text )
+  end
+
+  workbook.write( filename )
+rescue => e
+  puts e.to_s
+end
+
 
 # Display some descriptive text about this invocation, if appropriate.
 if @options[:verbose]
   puts 'Being verbose'
   puts "Using #{@options[:encoding]} encoding"
-  puts "Default extension is #{@options[:extension]}"
   puts "Maximum of #{@options[:redirects]} redirects allowed per link"
-  puts "Appending files to #{@options[:append]}" if @options[:append]
+
+  puts "Writing combining output to #{@options[:output]}" if @options[:output]
+  puts "Overwriting output file#{'s' if @options[:output]}" if @options[:truncate]
 end
 
 def process
+  if @options[:output]
+    tweets = []
+    ARGV.each {|file| tweets += read_csv( file )}
+    write_xslx( @options[:output], tweets )
+  else
+    ARGV.each {|file| write_xslx( file, read_csv( file ) )}
+  end
+end
+
+
+def proc2
 # Process each file specified on the command line.
 ARGV.each do |file|
   mentions, tags = [], []
