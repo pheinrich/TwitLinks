@@ -102,13 +102,6 @@ def get_workbook( filename )
   workbook
 end
 
-def read_csv( file )
-  filename = add_ext( file, 'csv' )
-  puts "Reading #{filename}..."
-
-  CSV.read( filename, encoding: @options[:encoding] )
-end
-
 # Copy over the original Twitter data that we care about.
 def write_twitter_row( workbook, tweet, indices )
   id = tweet[1].scan( /\d+$/ )[0]
@@ -183,12 +176,19 @@ def write_hashtag_rows( workbook, id, text )
     row += 1
   end
 
-  # Output a row mapping each tweet id to the mentions it contains.
+  # Output a row mapping each tweet id to the hashtags it contains.
   text.scan( /#(\w+)/ ).flatten.each do |hashtag|
     worksheet.add_cell( row, 0, id )
     worksheet.add_cell( row, 1, hashtag )
     row += 1
   end
+end
+
+def read_csv( file )
+  filename = add_ext( file, 'csv' )
+  puts "Reading #{filename}..."
+
+  CSV.read( filename, encoding: @options[:encoding] )
 end
 
 def write_xlsx( file, tweets )
