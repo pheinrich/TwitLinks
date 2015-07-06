@@ -232,7 +232,7 @@ if @options[:verbose]
   puts "Maximum of #{@options[:redirects]} redirects allowed per link"
 
   puts "Combining output in a single file" if @options[:output]
-  puts "Overwriting output file#{'s' if @options[:output]}" if @options[:truncate]
+  puts "Overwriting output file#{'s' unless @options[:output] || 1 == ARGV.length}" if @options[:truncate]
 end
 
 if @options[:output]
