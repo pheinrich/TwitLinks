@@ -14,9 +14,9 @@ TWITTER_COLS  = ['Tweet id', 'Tweet permalink', 'Tweet text', 'time',
                  'replies', 'favorites', 'user profile clicks', 'url clicks',
                  'hashtag clicks', 'detail expands', 'permalink clicks',
                  'embedded media views', 'app opens', 'app installs', 'follows']
-LINKS_COLS    = ['Tweet id', 'link', 'original']
-MENTIONS_COLS = ['Tweet id', 'mention']
-HASHTAGS_COLS = ['Tweet id', 'hashtag']
+LINKS_COLS    = ['Tweet id', 'time', 'engagements', 'link', 'original']
+MENTIONS_COLS = ['Tweet id', 'time', 'engagements', 'mention']
+HASHTAGS_COLS = ['Tweet id', 'time', 'engagements', 'hashtag']
 PROGRESS_LEN  = 25
   
 @options = {}
@@ -105,7 +105,7 @@ end
 # Copy over the original Twitter data that we care about.
 def write_twitter_row( workbook, tweet, indices )
   id = tweet[1].scan( /\d+$/ )[0]
-  text = tweet[2].gsub( /\r/, '' ) 
+  text = tweet[2].gsub( /\r/, '' )
 
   worksheet = workbook[SHEET_NAMES[:twitter]]
   row = worksheet.count
@@ -126,7 +126,7 @@ def write_twitter_row( workbook, tweet, indices )
   return id, text
 end
 
-def write_link_rows( workbook, id, text )
+def write_link_rows( workbook, id, text, time, engagements )
   worksheet = workbook[SHEET_NAMES[:links]]
   row = worksheet.count
 
@@ -140,13 +140,15 @@ def write_link_rows( workbook, id, text )
   # Output a row mapping each tweet id to the links it contains.
   text.scan( /https*:\/\/t\.co\/\w+/ ).each do |link|
     worksheet.add_cell( row, 0, id )
-    worksheet.add_cell( row, 1, find_target( URI.parse( link ) ) )
-    worksheet.add_cell( row, 2, link )
+    worksheet.add_cell( row, 1, time )
+    worksheet.add_cell( row, 2, engagements )
+    worksheet.add_cell( row, 3, find_target( URI.parse( link ) ) )
+    worksheet.add_cell( row, 4, link )
     row += 1
   end
 end
 
-def write_mention_rows( workbook, id, text )
+def write_mention_rows( workbook, id, text, time, engagements )
   worksheet = workbook[SHEET_NAMES[:mentions]]
   row = worksheet.count
 
@@ -160,12 +162,14 @@ def write_mention_rows( workbook, id, text )
   # Output a row mapping each tweet id to the mentions it contains.
   text.scan( /@(\w{1,15})/ ).flatten.each do |mention|
     worksheet.add_cell( row, 0, id )
-    worksheet.add_cell( row, 1, mention )
+    worksheet.add_cell( row, 1, time )
+    worksheet.add_cell( row, 2, engagements )
+    worksheet.add_cell( row, 3, mention )
     row += 1
   end
 end
 
-def write_hashtag_rows( workbook, id, text )
+def write_hashtag_rows( workbook, id, text, time, engagements )
   worksheet = workbook[SHEET_NAMES[:hashtags]]
   row = worksheet.count
 
@@ -179,7 +183,9 @@ def write_hashtag_rows( workbook, id, text )
   # Output a row mapping each tweet id to the hashtags it contains.
   text.scan( /#(\w+)/ ).flatten.each do |hashtag|
     worksheet.add_cell( row, 0, id )
-    worksheet.add_cell( row, 1, hashtag )
+    worksheet.add_cell( row, 1, time )
+    worksheet.add_cell( row, 2, engagements )
+    worksheet.add_cell( row, 3, hashtag )
     row += 1
   end
 end
@@ -204,14 +210,15 @@ def write_xlsx( file, tweets )
 
   tweets.each_with_index do |tweet, i|
     id, text = write_twitter_row( workbook, tweet, indices )
+    time, engagements = tweet[3], tweet[5].to_i 
 
     pct = 100.0 * i / tweets.length
     prog = (PROGRESS_LEN * pct / 100.0).to_i
     print "  [%s>%s] %d%% (#{id})    \r" % ['=' * prog, ' ' * (PROGRESS_LEN - prog), pct] if @options[:verbose] 
 
-    write_link_rows( workbook, id, text )
-    write_mention_rows( workbook, id, text )
-    write_hashtag_rows( workbook, id, text )
+    write_link_rows( workbook, id, text, time, engagements )
+    write_mention_rows( workbook, id, text, time, engagements )
+    write_hashtag_rows( workbook, id, text, time, engagements )
   end
 
   if @options[:verbose]
